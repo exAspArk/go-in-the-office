@@ -14,7 +14,12 @@ import (
     "io/ioutil"
     "encoding/json"
     "errors"
+    "regexp"
 )
+
+// TODO
+// cache MAC addresses
+// get user's MAC address
 
 func initDB() *sql.DB {
     db, err := sql.Open("sqlite3", "./go-in-the-office.sqlite")
@@ -52,12 +57,31 @@ func (user *User) Save(db *sql.DB) error {
     return nil
 }
 
-func MacAddresses() {
-    nmap := sh.Cmd("nmap")
-    arp := sh.Cmd("arp")
+func RouterIp() string {
+    netstat := sh.Cmd("netstat")
     grep := sh.Cmd("grep")
-    nmap("10.0.1.1/24", "-sP")
-    log.Print(sh.Pipe(arp("-a"), grep("-v", "incomplete")))
+    netstat_output := sh.Pipe(netstat("-r", "-n"), grep("default")).String()
+
+    re := regexp.MustCompile("([\\d.]+)")
+    result := re.FindStringSubmatch(netstat_output)[1]
+
+    return result
+}
+
+func MacAddresses() []string {
+    sudo := sh.Cmd("sudo")
+    grep := sh.Cmd("grep")
+    nmap_output := sh.Pipe(sudo("nmap", RouterIp() + "/24", "-sP"), grep("MAC Address: ")).String()
+
+    re := regexp.MustCompile("MAC Address: (.+) \\(.+\\)")
+    mac_addresses := re.FindAllStringSubmatch(nmap_output, -1)
+
+    result := make([]string, len(mac_addresses))
+    for i, value := range mac_addresses {
+        result[i] = value[1]
+    }
+
+    return result
 }
 
 func GetUserInfo(access_token string) (map[string]interface{}, error) {
@@ -81,10 +105,26 @@ func GetUserInfo(access_token string) (map[string]interface{}, error) {
     return result, nil
 }
 
-func FindUser(db *sql.DB, userId int) (*User, error) {
+func FindUserById(db *sql.DB, userId int) (*User, error) {
     user := &User{}
 
     rows, err := db.Query("SELECT id, name, avatar_url, mac_address FROM users WHERE id = ?", userId)
+    defer rows.Close()
+    if err != nil {
+        return user, err
+    }
+
+    if rows.Next() {
+        rows.Scan(&user.id, &user.name, &user.avatarUrl, &user.macAddress)
+    }
+
+    return user, nil
+}
+
+func FindUserByMacAddress(db *sql.DB, mac_address string) (*User, error) {
+    user := &User{}
+
+    rows, err := db.Query("SELECT id, name, avatar_url, mac_address FROM users WHERE mac_address = ?", mac_address)
     defer rows.Close()
     if err != nil {
         return user, err
@@ -134,7 +174,6 @@ func FindOrCreateUser(db *sql.DB, userInfo map[string]interface{}) (*User, error
 
 func main() {
     db := initDB()
-    MacAddresses()
 
     m := martini.Classic()
 
@@ -154,21 +193,32 @@ func main() {
             userInfo, err := GetUserInfo(tokens.Access())
             if err != nil {
                 r.HTML(404, "error", "can not get user info")
+                return
             }
 
             user, err := FindOrCreateUser(db, userInfo)
             if err != nil {
                 r.HTML(404, "error", "can not find or create user")
+                return
             }
 
             session.Set("userId", user.id)
             r.HTML(200, "avatar", user.avatarUrl)
+
         } else {
-            user, err := FindUser(db, userId.(int))
+            user, err := FindUserById(db, userId.(int))
             if err != nil {
                 r.HTML(404, "error", "can not find user")
+                return
             }
             r.HTML(200, "avatar", user.avatarUrl)
+        }
+
+        for _, mac_address := range MacAddresses() {
+            user, err := FindUserByMacAddress(db, mac_address)
+            if err == nil {
+                r.HTML(200, "avatar", user.avatarUrl)
+            }
         }
     })
 
