@@ -13,6 +13,7 @@ It is a [martini](https://github.com/go-martini/martini) web application which a
 
 	go get github.com/go-martini/martini
   go get github.com/martini-contrib/oauth2
+  go get github.com/martini-contrib/render
 	go run server.go
 
 3. `nmap` `sudo apt-get install nmap` `brew update && brew install nmap`

@@ -4,6 +4,7 @@ import (
     "github.com/go-martini/martini"
     "github.com/martini-contrib/oauth2"
     "github.com/martini-contrib/sessions"
+    "github.com/martini-contrib/render"
     "github.com/natefinch/sh"
     _ "github.com/mattn/go-sqlite3"
     "database/sql"
@@ -55,7 +56,7 @@ func MacAddresses() {
     nmap := sh.Cmd("nmap")
     arp := sh.Cmd("arp")
     grep := sh.Cmd("grep")
-    log.Print(nmap("10.0.1.1/24", "-sP"))
+    nmap("10.0.1.1/24", "-sP")
     log.Print(sh.Pipe(arp("-a"), grep("-v", "incomplete")))
 }
 
@@ -133,36 +134,41 @@ func FindOrCreateUser(db *sql.DB, userInfo map[string]interface{}) (*User, error
 
 func main() {
     db := initDB()
-    // MacAddresses()
+    MacAddresses()
 
     m := martini.Classic()
+
     m.Use(sessions.Sessions("my_session", sessions.NewCookieStore([]byte("secret123"))))
     m.Use(oauth2.Github(&oauth2.Options {
         ClientId:     "187efe794fff7d76ba90",
         ClientSecret: "00a6f3bc88fcfd5ddf42217798a4495c2a99632e",
     }))
+    m.Use(render.Renderer(render.Options{
+        Layout: "layout",
+    }))
 
-    m.Get("/", oauth2.LoginRequired, func(tokens oauth2.Tokens, session sessions.Session) string {
+    m.Get("/", oauth2.LoginRequired, func(tokens oauth2.Tokens, session sessions.Session, r render.Render) {
         userId := session.Get("userId")
-        if userId != nil && !tokens.IsExpired() {
-            user, err := FindUser(db, userId.(int))
-            if err != nil {
-                return "can not find user"
-            }
-            return user.avatarUrl
-        } else {
+
+        if userId == nil || tokens.IsExpired() {
             userInfo, err := GetUserInfo(tokens.Access())
             if err != nil {
-                return "can not get user info"
+                r.HTML(404, "error", "can not get user info")
             }
 
             user, err := FindOrCreateUser(db, userInfo)
             if err != nil {
-                return "can not find or create user"
+                r.HTML(404, "error", "can not find or create user")
             }
 
             session.Set("userId", user.id)
-            return user.avatarUrl
+            r.HTML(200, "avatar", user.avatarUrl)
+        } else {
+            user, err := FindUser(db, userId.(int))
+            if err != nil {
+                r.HTML(404, "error", "can not find user")
+            }
+            r.HTML(200, "avatar", user.avatarUrl)
         }
     })
 
